@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
-import openai
+from openai import OpenAI  # Use the new client initialization
 
-# Load your OpenAI API key
-openai.api_key = "YOUR_API_KEY"  # Replace with your actual API key
+# Initialize OpenAI client with your API key
+client = OpenAI(api_key="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")  # Replace with your key
 
-# Load your mock data
+# Load mock data
 df = pd.read_csv("mock_data.csv")
 
 # Chat interface
@@ -14,15 +14,16 @@ user_input = st.text_input("Ask a question about your data:")
 
 if user_input:
     try:
-        # Ask GPT-4 to analyze the data
-        response = openai.ChatCompletion.acreate(
-            model="gpt-4",  # Use "gpt-3.5-turbo" if you don't have access to GPT-4
+        # Generate a response using the latest API syntax
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",  # Use "gpt-4" if you have access
             messages=[
-                {"role": "system", "content": "You are a helpful assistant for analyzing data."},
-                {"role": "user", "content": f"Here is the data: {df.to_csv(index=False)}. {user_input}"}
+                {"role": "system", "content": "You are a data analyst assistant. Answer concisely."},
+                {"role": "user", "content": f"Data: {df.to_csv(index=False)}. Question: {user_input}"}
             ]
         )
+        # Display the answer
         st.write("**Answer:**")
-        st.write(response['choices'][0]['message']['content'])
+        st.write(response.choices[0].message.content)
     except Exception as e:
-        st.error(f"An error occurred: {e}")
+        st.error(f"Error: {e}")
