@@ -4,98 +4,105 @@ from openai import OpenAI
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-st.title("🚀 Unicorn Analytics Pro")
-uploaded_file = st.file_uploader("Upload your unicorn company dataset", type="csv")
+st.title("🤖 Analytics Co-Pilot")
+uploaded_file = st.file_uploader("Upload your dataset (CSV)", type="csv")
 
-def clean_valuation(value):
-    """Convert valuation strings to numeric (handles $, commas, etc.)"""
+# ----------------------
+# Core Analysis Engine
+# ----------------------
+def clean_currency(value):
+    """Convert values like '$1.2B' or '500M' to numeric (in millions)"""
+    if pd.isna(value) or value == "":
+        return None
     try:
         if isinstance(value, str):
-            # Remove non-numeric characters except decimals
-            return float(''.join(filter(lambda x: x.isdigit() or x == '.', value)))
+            value = value.replace(",", "").upper()
+            multiplier = 1
+            if "B" in value:  # Billion
+                multiplier = 1000
+                value = value.replace("B", "")
+            elif "M" in value:  # Million
+                multiplier = 1
+                value = value.replace("M", "")
+            return float(''.join(filter(lambda x: x.isdigit() or x == '.', value))) * multiplier
         return float(value)
     except:
-        return None  # Skip invalid values
+        return None
 
-def analyze_data(df, question):
-    """Precompute stats with error handling"""
-    context = {
-        "columns": list(df.columns),
-        "row_count": len(df),
-        "top_countries": None,
-        "top_industries": None,
-        "avg_valuation": None,
-        "sample_companies": []
-    }
+def analyze_dataset(df):
+    """Auto-analyze ANY dataset (general-purpose)"""
+    context = {"columns": [], "numeric_stats": {}, "categorical_stats": {}}
 
-    try:
-        # Auto-detect columns
-        valuation_col = next((col for col in df.columns if "valuation" in col.lower()), None)
-        country_col = next((col for col in df.columns if "country" in col.lower()), None)
-        industry_col = next((col for col in df.columns if "industry" in col.lower()), None)
+    # Auto-classify columns
+    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+    for col in df.columns:
+        # Detect numeric columns hidden as strings (e.g., "Valuation")
+        if df[col].apply(lambda x: isinstance(x, str) and any(c.isdigit() for c in x)).any():
+            cleaned = df[col].apply(clean_currency).dropna()
+            if not cleaned.empty:
+                numeric_cols.append(col)
+                df[f"cleaned_{col}"] = cleaned
+                context["numeric_stats"][col] = {
+                    "mean": cleaned.mean(),
+                    "max": cleaned.max(),
+                    "min": cleaned.min()
+                }
 
-        # Calculate valuation stats
-        if valuation_col:
-            df['cleaned_valuation'] = df[valuation_col].apply(clean_valuation)
-            context["avg_valuation"] = df['cleaned_valuation'].mean(skipna=True)
+    # Categorical analysis
+    categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+    for col in categorical_cols:
+        context["categorical_stats"][col] = df[col].value_counts().head(5).to_dict()
 
-        # Calculate country/industry stats
-        if country_col:
-            context["top_countries"] = df[country_col].value_counts().head(5).to_dict()
-        
-        if industry_col:
-            context["top_industries"] = df[industry_col].value_counts().head(5).to_dict()
-
-        # Sample companies (if column exists)
-        if "company" in df.columns:
-            context["sample_companies"] = df.sample(3).to_dict("records")
-
-    except Exception as e:
-        st.error(f"Data analysis error: {str(e)}")
-
+    # Sample records
+    context["sample_records"] = df.sample(min(3, len(df))).to_dict("records")
     return context
 
+# ----------------------
+# Streamlit UI
+# ----------------------
 if uploaded_file:
-    try:
-        df = pd.read_csv(uploaded_file)
-        st.write("Data Preview:", df.head(2))
+    df = pd.read_csv(uploaded_file)
+    st.write("## Data Preview")
+    st.write(df.head(3))
 
-        # Always show the input box, even after errors
-        question = st.text_input("Ask a question (e.g., 'Which country dominates in tech unicorns?'):")
+    # Always show input box
+    question = st.text_input("Ask a question about your data:")
 
-        if question:
-            with st.spinner("Analyzing..."):
-                # Generate context
-                context = analyze_data(df, question)
+    if question:
+        with st.spinner("Analyzing..."):
+            # Step 1: Auto-analyze dataset
+            context = analyze_dataset(df)
 
-                # Build prompt
-                prompt = f"""
-                **Task**: Answer "{question}" using the data below. Be quantitative.
+            # Step 2: Build general-purpose prompt
+            prompt = f"""
+            **Task**: Answer the user's question: "{question}"
 
-                **Context**:
-                - Columns: {context['columns']}
-                - Total companies: {context['row_count']}
-                - Top countries: {context['top_countries'] or 'N/A'}
-                - Top industries: {context['top_industries'] or 'N/A'}
-                - Avg valuation: {context['avg_valuation'] or 'N/A'}
-                Sample companies: {context['sample_companies']}
-                """
+            **Dataset Context**:
+            - Columns: {context['columns'] or list(df.columns)}
+            - Numeric Columns: {list(context['numeric_stats'].keys())}
+            {f"- Numeric Stats: {context['numeric_stats']}" if context['numeric_stats'] else ""}
+            {f"- Categorical Stats: {context['categorical_stats']}" if context['categorical_stats'] else ""}
+            - Sample Records: {context['sample_records']}
 
-                # Get answer
-                try:
-                    response = client.chat.completions.create(
-                        model="gpt-4o",
-                        messages=[
-                            {"role": "system", "content": "You are a data analyst. Use the context below."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        temperature=0.1
-                    )
-                    st.subheader("Answer")
-                    st.write(response.choices[0].message.content)
+            **Rules**:
+            1. Use ONLY the data and stats above.
+            2. If values need conversion (e.g., $1B = 1000M), do it explicitly.
+            3. For comparisons, use max/min values from numeric_stats.
+            4. Never assume columns exist - verify first.
+            """
 
-                except Exception as e:
-                    st.error(f"API Error: {str(e)}")
+            # Step 3: Get AI response
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "You are a general-purpose data analyst. Use the context below."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.1
+                )
+                st.write("## Answer")
+                st.write(response.choices[0].message.content)
 
-    except Exception as e:
-        st.error(f"Failed to load file: {str(e)}")
+            except Exception as e:
+                st.error(f"Analysis failed: {str(e)}")
