@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
-import openai
+from openai import OpenAI
 
-# Configure OpenAI
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# Configure OpenAI client
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 # Set app title
 st.title("Analytics Copilot 🤖 (GPT-4 Version)")
@@ -25,12 +25,12 @@ def generate_summary(df, context):
     {df.head(3)}
     """
 
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3
     )
-    return response.choices[0].message['content']
+    return response.choices[0].message.content
 
 # Function to handle user queries
 def handle_query(user_query, context, summary):
@@ -46,7 +46,7 @@ def handle_query(user_query, context, summary):
     4. Use markdown formatting for responses
     """
 
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4",
         messages=[
             {"role": "system", "content": system_prompt},
@@ -54,7 +54,7 @@ def handle_query(user_query, context, summary):
         ],
         temperature=0.4
     )
-    return response.choices[0].message['content']
+    return response.choices[0].message.content
 
 # File upload section
 uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
