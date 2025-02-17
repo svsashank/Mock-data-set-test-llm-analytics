@@ -1,73 +1,111 @@
 import streamlit as st
 import pandas as pd
-from openai import OpenAI
+import openai
 
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# Configure OpenAI
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-st.title("🧠 Smart Data Assistant")
-uploaded_file = st.file_uploader("Upload CSV", type="csv")
+# Set app title
+st.title("Analytics Copilot 🤖 (GPT-4 Version)")
 
-def get_data_context(df, question):
-    """Dynamic context builder - no static summaries"""
-    context = {
-        "schema": str(df.dtypes.to_dict()),
-        "num_rows": len(df),
-        # Auto-detect key columns using LLM pattern recognition
-        "likely_metrics": [col for col in df.columns if df[col].dtype in ['int64', 'float64']],
-        "likely_dimensions": [col for col in df.columns if df[col].dtype == 'object'],
-        # Smart sample: 0.5% of data or 50 rows, whichever smaller
-        "sample": df.sample(min(50, len(df)//200)).to_dict("records")
-    }
+# Initialize session state for messages
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    # Auto-focus on relevant columns
-    if "country" in question.lower():
-        context["country_data"] = df[[c for c in df.columns if "country" in c.lower()]].value_counts().to_dict()
+# Function to generate data summary using OpenAI
+def generate_summary(df, context):
+    prompt = f"""
+    You are a data analysis assistant. Generate a concise summary (3-5 bullet points) about this dataset.
+    Context provided by user: {context}
 
-    return context
+    Dataset information:
+    Number of rows: {df.shape[0]}
+    Number of columns: {df.shape[1]}
+    First 3 rows:
+    {df.head(3)}
+    """
 
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3
+    )
+    return response.choices[0].message['content']
 
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# Function to handle user queries
+def handle_query(user_query, context, summary):
+    system_prompt = f"""
+    You are an expert data analyst. Use the following context to answer questions.
+    Data Context: {context}
+    Data Summary: {summary}
 
-    if prompt := st.chat_input("Ask about your data:"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    Follow these rules:
+    1. Be concise and professional
+    2. If calculation is needed, explain your approach
+    3. Always mention data limitations if relevant
+    4. Use markdown formatting for responses
+    """
 
-        with st.spinner("Analyzing..."):
-            # Step 1: Build dynamic context based on question
-            context = get_data_context(df, prompt)
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_query}
+        ],
+        temperature=0.4
+    )
+    return response.choices[0].message['content']
 
-            # Step 2: Construct focused prompt
-            messages = [
-                {
-                    "role": "system",
-                    "content": f"""You're a data analyst. Use these clues about the dataset:
-                    - Schema: {context['schema']}
-                    - Size: {context['num_rows']} rows
-                    - Likely Metrics: {context['likely_metrics']}
-                    - Sample Rows: {context['sample'][:3]}
+# File upload section
+uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
-                    Rules:
-                    1. First identify which columns answer the question
-                    2. Consider full dataset patterns, not just samples
-                    3. Handle units/formatting natively (e.g., $1B = 1000M)
-                    """
-                },
-                *st.session_state.messages
-            ]
+if uploaded_file is not None:
+    try:
+        df = pd.read_csv(uploaded_file)
+        st.success("File uploaded successfully!")
 
-            # Step 3: Get AI response
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                temperature=0
-            )
+        # Get data context from user
+        context = st.text_input("Briefly describe the context of your data (e.g., 'Sales data for Q2 2023')")
 
-            # Display response
-            with st.chat_message("assistant"):
-                st.write(response.choices[0].message.content)
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": response.choices[0].message.content
-            })
+        if context:
+            # Generate and display summary
+            if "summary" not in st.session_state:
+                with st.spinner("Analyzing your data..."):
+                    st.session_state.summary = generate_summary(df, context)
+                    st.session_state.context = context
+
+            st.subheader("Data Summary")
+            st.markdown(st.session_state.summary)
+
+            # Chat interface
+            st.subheader("Ask me anything about your data")
+
+            # Display previous messages
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+
+            # Handle new query
+            if user_query := st.chat_input("Type your question..."):
+                # Add user message to history
+                st.session_state.messages.append({"role": "user", "content": user_query})
+
+                # Generate response
+                with st.spinner("Thinking..."):
+                    response = handle_query(
+                        user_query,
+                        st.session_state.context,
+                        st.session_state.summary
+                    )
+
+                # Add assistant response to history
+                st.session_state.messages.append({"role": "assistant", "content": response})
+
+                # Display messages
+                with st.chat_message("user"):
+                    st.markdown(user_query)
+                with st.chat_message("assistant"):
+                    st.markdown(response)
+
+    except Exception as e:
+        st.error(f"Error loading file: {str(e)}")
