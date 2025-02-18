@@ -1,7 +1,3 @@
-import sys
-!{sys.executable} -m pip install --upgrade chromadb==0.4.22
-
-
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
