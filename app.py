@@ -1,49 +1,50 @@
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import Chroma
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-# Configure OpenAI client
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+embeddings = OpenAIEmbeddings(openai_api_key=st.secrets["OPENAI_API_KEY"])
 
-# Set app title
-st.title("Analytics Copilot 🤖 (GPT-4 Version)")
+st.title("Enterprise Analytics Copilot 🚀")
 
-# Initialize session state for messages
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# Function to generate data summary using OpenAI
-def generate_summary(df, context):
-    prompt = f"""
-    You are a data analysis assistant. Generate a concise summary (3-5 bullet points) about this dataset.
-    Context provided by user: {context}
-
-    Dataset information:
-    Number of rows: {df.shape[0]}
-    Number of columns: {df.shape[1]}
-    First 3 rows:
-    {df.head(3)}
-    """
-
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3
+def process_data(df):
+    # Convert data to analyzable text chunks
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
     )
-    return response.choices[0].message.content
 
-# Function to handle user queries
-def handle_query(user_query, context, summary):
+    # Create document format
+    docs = []
+    for _, row in df.iterrows():
+        doc = f"Row {_}: " + " | ".join([f"{col}={val}" for col, val in row.items()])
+        docs.append(doc)
+
+    # Split and embed
+    chunks = text_splitter.create_documents(docs)
+    vector_db = Chroma.from_documents(chunks, embeddings)
+    return vector_db
+
+def analyze_query(vector_db, user_query, context):
+    # Retrieve relevant data chunks
+    relevant_docs = vector_db.similarity_search(user_query, k=5)
+    docs_text = "\n".join([doc.page_content for doc in relevant_docs])
+
     system_prompt = f"""
-    You are an expert data analyst. Use the following context to answer questions.
-    Data Context: {context}
-    Data Summary: {summary}
+    Analyze this data subset for a user asking: {user_query}
+    Context: {context}
 
-    Follow these rules:
-    1. Be concise and professional
-    2. If calculation is needed, explain your approach
-    3. Always mention data limitations if relevant
-    4. Use markdown formatting for responses
+    Data Subset:
+    {docs_text}
+
+    Required:
+    1. Statistical analysis of relevant columns
+    2. Trend identification
+    3. Numerical examples from data
+    4. Markdown formatting
     """
 
     response = client.chat.completions.create(
@@ -52,60 +53,33 @@ def handle_query(user_query, context, summary):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_query}
         ],
-        temperature=0.4
+        temperature=0.3
     )
     return response.choices[0].message.content
 
-# File upload section
-uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
+# File upload
+uploaded_file = st.file_uploader("Upload Large CSV (100k+ rows)", type=["csv"])
 
-if uploaded_file is not None:
-    try:
-        df = pd.read_csv(uploaded_file)
-        st.success("File uploaded successfully!")
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+    st.success(f"Loaded {len(df)} rows")
 
-        # Get data context from user
-        context = st.text_input("Briefly describe the context of your data (e.g., 'Sales data for Q2 2023')")
+    if "vector_db" not in st.session_state:
+        with st.spinner("Indexing dataset..."):
+            st.session_state.vector_db = process_data(df)
 
-        if context:
-            # Generate and display summary
-            if "summary" not in st.session_state:
-                with st.spinner("Analyzing your data..."):
-                    st.session_state.summary = generate_summary(df, context)
-                    st.session_state.context = context
+    context = st.text_input("Business context")
 
-            st.subheader("Data Summary")
-            st.markdown(st.session_state.summary)
+    if context and (query := st.chat_input("Ask deep analytical questions")):
+        with st.spinner("Analyzing..."):
+            response = analyze_query(
+                st.session_state.vector_db,
+                query,
+                context
+            )
 
-            # Chat interface
-            st.subheader("Ask me anything about your data")
-
-            # Display previous messages
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-
-            # Handle new query
-            if user_query := st.chat_input("Type your question..."):
-                # Add user message to history
-                st.session_state.messages.append({"role": "user", "content": user_query})
-
-                # Generate response
-                with st.spinner("Thinking..."):
-                    response = handle_query(
-                        user_query,
-                        st.session_state.context,
-                        st.session_state.summary
-                    )
-
-                # Add assistant response to history
-                st.session_state.messages.append({"role": "assistant", "content": response})
-
-                # Display messages
-                with st.chat_message("user"):
-                    st.markdown(user_query)
-                with st.chat_message("assistant"):
-                    st.markdown(response)
-
-    except Exception as e:
-        st.error(f"Error loading file: {str(e)}")
+        st.markdown(f"""
+        ### Analysis of {len(df)} rows
+        **Your Question:** {query}
+        {response}
+        """)
