@@ -1,10 +1,12 @@
+import sys
+!{sys.executable} -m pip install --upgrade chromadb==0.4.22
+
+
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
-from langchain_openai import OpenAIEmbeddings
-from langchain_openai import ChatOpenAI
 from langchain_community.vectorstores import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 embeddings = OpenAIEmbeddings(openai_api_key=st.secrets["OPENAI_API_KEY"])
